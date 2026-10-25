@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OTP Message Checker</title>
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--ink:#18202b;--mute:#5d6877;--line:#d9dee5;--ok:#1b7f55;--warn:#b26a00;--bad:#c0392b}
+@media (prefers-color-scheme:dark){:root{--bg:#10151c;--card:#19212b;--ink:#e8edf3;--mute:#9aa7b6;--line:#2c3744;--ok:#4cc38a;--warn:#f0a93b;--bad:#ff6b5b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,"Segoe UI",Roboto,sans-serif}
+main{max-width:720px;margin:0 auto;padding:28px 16px 48px}
+h1{font-size:1.7rem;margin:0 0 6px}
+.sub{color:var(--mute);margin:0 0 22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px}
+label{display:block;font-weight:600;margin:0 0 6px}
+textarea,input{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px}
+textarea{min-height:130px;resize:vertical}
+input{margin-bottom:14px}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+button{font:inherit;border-radius:8px;padding:10px 16px;cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+button.go{background:var(--ink);color:var(--bg);border-color:var(--ink);font-weight:600}
+button:focus-visible,textarea:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-offset:2px}
+.samples{margin-top:12px;color:var(--mute);font-size:.9rem}
+.samples button{padding:5px 10px;font-size:.85rem;margin:4px 6px 0 0}
+#result{margin-top:22px}
+#result[hidden]{display:none}
+.verdict{font-size:1.35rem;font-weight:700;margin:0 0 4px}
+.v-ok{color:var(--ok)}.v-warn{color:var(--warn)}.v-bad{color:var(--bad)}
+.bar{height:10px;background:var(--bg);border:1px solid var(--line);border-radius:6px;overflow:hidden;margin:10px 0 14px}
+.bar i{display:block;height:100%;width:0;transition:width .4s}
+ul{list-style:none;margin:0;padding:0}
+li{padding:8px 0;border-top:1px solid var(--line)}
+li b{display:inline-block;min-width:2.6em}
+.p-bad b{color:var(--bad)}.p-good b{color:var(--ok)}
+.note{color:var(--mute);font-size:.88rem;margin-top:16px}
+@media (prefers-reduced-motion:reduce){.bar i{transition:none}}
+</style>
+</head>
+<body>
+<main>
+  <h1>OTP Message Checker</h1>
+  <p class="sub">Paste an SMS you received. We look for the patterns scammers use and tell you how risky it looks. Nothing leaves your device.</p>
+
+  <section class="card">
+    <label for="sender">Sender ID (optional)</label>
+    <input id="sender" placeholder="e.g. AX-HDFCBK or +91 98xxxxxx12" autocomplete="off">
+    <label for="msg">Message text</label>
+    <textarea id="msg" placeholder="Paste the full message here"></textarea>
+    <div class="row">
+      <button class="go" id="check">Check message</button>
+      <button id="clear">Clear</button>
+    </div>
+    <div class="samples">Try an example:
+      <button data-s="real">Genuine-style OTP</button>
+      <button data-s="scam1">Share-the-OTP scam</button>
+      <button data-s="scam2">Fake KYC link</button>
+    </div>
+  </section>
+
+  <section id="result" class="card" hidden aria-live="polite">
+    <p class="verdict" id="verdict"></p>
+    <div id="summary"></div>
+    <div class="bar"><i id="fill"></i></div>
+    <ul id="reasons"></ul>
+    <p class="note" id="advice"></p>
+  </section>
+
+  <p class="note">This tool uses rules, not magic. It can miss clever scams and can flag genuine messages. The one rule that always holds: no bank, shop or officer ever needs you to tell them your OTP.</p>
+</main>
+
+<script>
+// Each rule: a pattern, points added to the risk score (negative = trust signal), and a plain-language reason.
+const SHORTENERS = /\b(bit\.ly|tinyurl\.com|t\.co|cutt\.ly|rb\.gy|is\.gd|goo\.gl|wa\.me|t\.ly)\b/i;
+const RULES = [
+  {re: /(https?:\/\/|www\.)\S+|\b[\w-]+\.(xyz|top|click|link|info|online|site|live|cc|tk|ml|icu)\b/i, pts: 30,
+   why: "Contains a link. Real OTP messages only carry a code and never ask you to open a website."},
+  {re: SHORTENERS, pts: 15, why: "Uses a shortened link, which hides where it really goes."},
+  {re: /\b(share|send|forward|tell|give|reply|provide|read out)\b[^.]{0,40}\b(otp|code|pin)\b/i, pts: 50,
+   why: "Asks you to share or send the OTP. This is the most common OTP scam."},
+  {re: /\b(cvv|card number|pin|password|aadhaa?r|pan card|net ?banking|atm)\b/i, pts: 35,
+   why: "Mentions sensitive details (CVV, PIN, password, Aadhaar, card). Real OTP messages do not ask for these."},
+  {re: /\b(urgent|immediately|asap|act now|last chance|final (notice|warning)|expire[sd]? (today|soon)|within \d+ ?(hours?|hrs|mins?|minutes))\b|\b(blocked|suspended|deactivated|frozen|freeze)\b/i, pts: 20,
+   why: "Creates pressure or threatens to block your account. Scammers rely on panic."},
+  {re: /\b(kyc|won|winner|lottery|prize|reward points?|cashback|refund|gift|claim|lucky|congratulations)\b/i, pts: 25,
+   why: "Talks about prizes, refunds or KYC updates, which are common bait."},
+  {re: /\b(call|contact|whatsapp)\b[^.]{0,25}\+?\d[\d\s-]{8,}|\b(anydesk|teamviewer|quicksupport|apk|install|download)\b/i, pts: 30,
+   why: "Asks you to call a number or install an app. This is a remote-access scam pattern."},
+  {re: /do not share|don'?t share|never share|do not disclose/i, pts: -10,
+   why: "Includes the standard \"do not share\" warning that genuine messages carry. Scammers can copy it, so this is a small signal."},
+  {re: /\b(login|log in|transaction|txn|payment|purchase|registration|verification|order|booking|delivery)\b/i, pts: -10,
+   why: "States what the code is for, as genuine messages usually do."},
+  {re: /valid (for|till|until)|expires? in \d+/i, pts: -10,
+   why: "States how long the code is valid."}
+];
+
+function analyse(text, sender){
+  const hits = [];
+  // Remove "do not share this OTP" sentences first so the warning isn't mistaken for a request to share.
+  const clean = text.replace(/(do not|don'?t|never|not to)\s+(share|disclose|give|tell|forward)[^.]*\.?/gi, " ");
+  RULES.forEach(r => { if (r.re.test(clean)) hits.push({pts: r.pts, why: r.why}); });
+
+  if (!/\b\d{4,8}\b/.test(text)) hits.push({pts: 10, why: "No 4 to 8 digit code found. A genuine OTP message always contains one."});
+  const letters = text.replace(/[^A-Za-z]/g, "");
+  const caps = letters.length > 20 && (letters.replace(/[^A-Z]/g, "").length / letters.length) > 0.5;
+  if (caps || (text.match(/!/g) || []).length >= 2) hits.push({pts: 10, why: "Shouting capitals or lots of exclamation marks. Official messages are usually calm."});
+
+  const s = sender.trim();
+  if (s){
+    if (/^[A-Za-z]{2}-[A-Za-z0-9]{3,8}(-[A-Za-z])?$/.test(s)) hits.push({pts: -10, why: "Sender ID is in the official header format (e.g. AX-HDFCBK), but headers can be spoofed."});
+    else if (/^\+?\d[\d\s-]{8,}$/.test(s)) hits.push({pts: 20, why: "Sent from an ordinary mobile number. Banks and apps normally send from a named header."});
+  }
+  const score = Math.max(0, Math.min(100, hits.reduce((a, h) => a + h.pts, 0)));
+  return {score, hits};
+}
+
+const $ = id => document.getElementById(id);
+function show(){
+  const text = $("msg").value.trim();
+  if (!text){ $("msg").focus(); return; }
+  const {score, hits} = analyse(text, $("sender").value);
+  let cls, label, advice, color;
+  if (score >= 50){ cls = "v-bad"; label = "Likely fake"; color = "var(--bad)";
+    advice = "Do not click anything, call any number, or share any code. Delete it, and report it at cybercrime.gov.in or on helpline 1930 if you lost money."; }
+  else if (score >= 20){ cls = "v-warn"; label = "Suspicious"; color = "var(--warn)";
+    advice = "Be careful. Don't click links. If it claims to be your bank or an app, open the official app yourself or call the number on your card."; }
+  else { cls = "v-ok"; label = "Looks genuine"; color = "var(--ok)";
+    advice = "Nothing alarming found. Still, only use the code if you just requested it yourself, and never tell it to anyone."; }
+  $("verdict").textContent = label; $("verdict").className = "verdict " + cls;
+  $("summary").textContent = "Risk score: " + score + " / 100";
+  $("fill").style.width = score + "%"; $("fill").style.background = color;
+  const ul = $("reasons"); ul.textContent = "";
+  if (!hits.length){ const li = document.createElement("li"); li.textContent = "No warning signs matched."; ul.appendChild(li); }
+  hits.sort((a, b) => b.pts - a.pts).forEach(h => {
+    const li = document.createElement("li"); li.className = h.pts > 0 ? "p-bad" : "p-good";
+    const b = document.createElement("b"); b.textContent = (h.pts > 0 ? "+" : "") + h.pts;
+    li.appendChild(b); li.appendChild(document.createTextNode(" " + h.why)); ul.appendChild(li);
+  });
+  $("advice").textContent = advice;
+  $("result").hidden = false;
+}
+
+const SAMPLES = {
+  real: ["AX-HDFCBK", "482913 is your OTP for transaction of Rs.1,250 at Amazon. Valid for 10 minutes. Do not share this OTP with anyone."],
+  scam1: ["+91 98765 43210", "URGENT! Your SBI account will be blocked. Share the OTP 739201 with our officer to verify your KYC immediately."],
+  scam2: ["", "Congratulations! You have won a cashback reward. Claim now: http://bit.ly/claim-rewrd and enter your card number and OTP."]
+};
+document.querySelectorAll("[data-s]").forEach(b => b.addEventListener("click", () => {
+  const [s, m] = SAMPLES[b.dataset.s]; $("sender").value = s; $("msg").value = m; show();
+}));
+$("check").addEventListener("click", show);
+$("clear").addEventListener("click", () => { $("msg").value = ""; $("sender").value = ""; $("result").hidden = true; $("msg").focus(); });
+</script>
+</body>
+</html>
